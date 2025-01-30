@@ -1,13 +1,14 @@
 // components/Footer.jsx
 import { FaTwitter, FaFacebookF, FaLinkedinIn, FaGithub } from 'react-icons/fa';
+import logo from '../assets/icon.png'; // Adjust the path if needed
 
 export const Footer = () => {
   return (
     <footer className="bg-gray-900 py-12 px-6">
-      <div className="container mx-auto flex justify-between items-center text-gray-400">
+      <div className="container mx-auto flex flex-col lg:flex-row justify-between items-center text-gray-400">
         
         {/* Social Media Section */}
-        <div className="flex space-x-8">
+        <div className="flex space-x-8 mb-8 lg:mb-0">
           <a
             href="https://twitter.com"
             target="_blank"
@@ -43,17 +44,18 @@ export const Footer = () => {
         </div>
 
         {/* Center Section - Logo or Tagline */}
-        <div className="text-center text-gray-400">
+        <div className="text-center mb-8 lg:mb-0">
           <img
-            src="C:\Gen-Ai\React Project Managment App\GenAI-Project-1-ust\FrontEnd\my-react-app\src\assets\icon.png" // You can replace with your logo image file
+            src={logo}
             alt="AI Made Easier Logo"
-            className="w-24 h-auto mx-auto mb-4" // Adjust size of the logo as needed
+            className="w-24 h-auto mx-auto mb-4 filter invert"
+            // The `invert` filter inverts the colors of the image
           />
           <p className="text-sm font-medium">Revolutionizing AI, Making It Easier for Everyone</p>
         </div>
 
         {/* Legal Section */}
-        <div className="text-sm text-gray-500 text-right">
+        <div className="text-sm text-gray-500 text-center lg:text-right">
           <p className="mb-3">© 2023 AI Made Easier. All rights reserved.</p>
           <div>
             <a
