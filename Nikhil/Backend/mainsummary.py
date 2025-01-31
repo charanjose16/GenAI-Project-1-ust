@@ -25,7 +25,7 @@ app = FastAPI()
 # Enable CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -116,6 +116,7 @@ def extract_blog_content(url):
 def summarize_blog(content, url):
     """
     Summarize the blog content using Azure OpenAI.
+    Returns the summary, prompt tokens, and response tokens.
     """
     try:
         prompt = f"""
@@ -128,18 +129,31 @@ def summarize_blog(content, url):
             "reference_link": "{url}"
         }}
         """
+        
+        # Calculate the number of tokens in the prompt
+        prompt_tokens = len(encoding.encode(prompt))
+        
         response = client.chat.completions.create(
             model=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
             messages=[{"role": "system", "content": "You summarize articles."}, {"role": "user", "content": prompt}],
             max_tokens=500,
             temperature=0.7
         )
+        
+        # Extract the generated text from the response
         generated_text = response.choices[0].message.content
+        
+        # Calculate the number of tokens in the response
+        response_tokens = len(encoding.encode(generated_text))
+        
+        # Parse the summary from the generated text
         summary_data = json.loads(generated_text)
-        return {
+        summary = {
             "summary": summary_data["summary"],
             "reference_link": summary_data["reference_link"],
         }
+        
+        return summary, prompt_tokens, response_tokens
     except Exception as e:
         logging.error(f"Error summarizing blog: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error summarizing blog: {str(e)}")
@@ -152,23 +166,49 @@ def summarize_topic_endpoint(topic_request: TopicRequest):
     try:
         topic = topic_request.topic
         logging.info(f"Searching for articles on: {topic}")
+        
         # Step 1: Search for articles
         urls = search_articles(topic)
         if not urls:
             raise HTTPException(status_code=404, detail="No articles found.")
+        
         # Step 2: Extract & Summarize
         summaries = []
+        total_prompt_tokens = 0
+        total_response_tokens = 0
+        total_tokens = 0
+        
         for url in urls:
             try:
                 content = extract_blog_content(url)
                 if not content:
                     logging.warning(f"Skipping URL {url} due to empty content.")
                     continue
-                summary = summarize_blog(content, url)
+                
+                # Summarize the blog and get token counts
+                summary, prompt_tokens, response_tokens = summarize_blog(content, url)
+                
+                # Accumulate token counts
+                total_prompt_tokens += prompt_tokens
+                total_response_tokens += response_tokens
+                total_tokens += (prompt_tokens + response_tokens)
+                
                 summaries.append(summary)
             except Exception as e:
                 logging.error(f"Skipping URL {url} due to error: {str(e)}")
-        return {"topic": topic, "articles": summaries}
+        
+        # Add token counts to the final response
+        response = {
+            "topic": topic,
+            "articles": summaries,
+            "tokens": {
+                "prompt_tokens": total_prompt_tokens,
+                "response_tokens": total_response_tokens,
+                "total_tokens": total_tokens
+            }
+        }
+        
+        return response
     except Exception as e:
         logging.error(f"Error in /summarize-topic: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
