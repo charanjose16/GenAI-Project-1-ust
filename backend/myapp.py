@@ -24,14 +24,15 @@ from fastapi.responses import FileResponse
 import dspy
 import tiktoken
 from typing import List, Optional
-
-
+from sentence_transformers import SentenceTransformer, util
+ 
+ 
 app = FastAPI()
-
+ 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 os.environ["CURL_CA_BUNDLE"] = "./huggingface.co.crt"
  
-# Load Sentence Transformer model
+ 
 model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 app.add_middleware(
     CORSMiddleware,
@@ -40,23 +41,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+ 
 SECRET_KEY = "your-secret-key"
 ALGORITHM = "HS256"
-
+ 
+azure_config = {
+    "engine": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
+    "azure_endpoint": os.getenv("AZURE_OPENAI_ENDPOINT"),
+    "api_key": os.getenv("AZURE_OPENAI_API_KEY"),
+    "api_version": os.getenv("AZURE_OPENAI_API_VERSION", "2023-07-01-preview"),
+}
+ 
 missing = [k for k, v in azure_config.items() if not v and k != "api_version"]
 if missing:
     raise RuntimeError(f"Missing Azure OpenAI configuration: {missing}")
+ 
+ 
  
 llm = AzureOpenAI(
     **azure_config,
     temperature=0.2,
 )
  
-# Set global LLM
+ 
 Settings.llm = llm
  
-# In-memory storage for documents and embeddings
+ 
 documents = []
 doc_embeddings = np.array([])
  
@@ -73,7 +83,7 @@ class DocumentResponse(BaseModel):
  
 class AnswerResponse(BaseModel):
     answer: str
-
+ 
 class WebsiteDataResponse(BaseModel):
     hero_text: Optional[str]
     website_description: Optional[str]
@@ -134,40 +144,40 @@ dspy_lm = dspy.LM(
 )
 dspy.configure(lm=dspy_lm)
 website_data_extractor = WebsiteDataExtraction()
-
+ 
 def create_jwt_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(hours=24)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
+ 
 def hash_password(password: str):
     return hashlib.sha256(password.encode()).hexdigest()
-
+ 
 def verify_password(plain_password: str, hashed_password: str):
     return hash_password(plain_password) == hashed_password
-
+ 
 # In-memory storage
 fake_users_db = {}
 fake_tokens_db = {}  # Maps user_id to total tokens
-
+ 
 class UserCreate(BaseModel):
     name: str
     email: str
     password: str
     role: str = "user"
-
+ 
 class UserLogin(BaseModel):
     email: str
     password: str
-
+ 
 class TokenUpdate(BaseModel):
     user_id: int
     tokens_used: int
-
+ 
 class TopicRequest(BaseModel):
     topic: str
-
+ 
 def search_articles(topic: str):
     """
     Search for articles related to the topic using DuckDuckGo.
@@ -177,7 +187,7 @@ def search_articles(topic: str):
         # Refine the query by appending "articles" to make it more specific
         refined_topic = f"{topic} articles"
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
+ 
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(
             f"https://html.duckduckgo.com/html/?q={refined_topic}",
@@ -185,37 +195,37 @@ def search_articles(topic: str):
             verify=False
         )
         response.raise_for_status()
-
+ 
         soup = BeautifulSoup(response.text, "html.parser")
         results = soup.find_all("a", class_="result__url")
         urls = []
-
+ 
         for result in results:
             if "href" in result.attrs:
                 raw_url = result["href"]
                 parsed_url = urlparse(raw_url)
                 query_params = parse_qs(parsed_url.query)
-
+ 
                 # Extract URL from 'uddg' parameter
                 if "uddg" in query_params:
                     fixed_url = query_params["uddg"][0]
                 else:
                     # Fallback to raw URL if 'uddg' is missing
                     fixed_url = raw_url
-
+ 
                 if not fixed_url.startswith("http"):
                     fixed_url = "https://" + fixed_url
                 urls.append(fixed_url)
-
+ 
             # Add a small delay to avoid rate limiting
             time.sleep(1)
-
+ 
         logging.info(f"Extracted URLs: {urls}")
         return urls[:5]  # Limit to 5 results
     except Exception as e:
         logging.error(f"Error searching articles: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to search for articles.")
-
+ 
 def extract_blog_content(url):
     """
     Extracts content from a blog article given a URL.
@@ -227,16 +237,16 @@ def extract_blog_content(url):
         soup = BeautifulSoup(response.text, "html.parser")
         paragraphs = soup.find_all("p")
         content = " ".join([p.get_text() for p in paragraphs])
-
+ 
         if not content.strip():
             logging.warning(f"No content extracted from URL: {url}")
             return None
-
+ 
         return content
     except Exception as e:
         logging.error(f"Error extracting blog content: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Failed to extract blog content: {str(e)}")
-
+ 
 def summarize_blog(content, url):
     """
     Summarize the blog content using Azure OpenAI.
@@ -267,13 +277,13 @@ def summarize_blog(content, url):
     except Exception as e:
         logging.error(f"Error summarizing blog: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error summarizing blog: {str(e)}")
-
-
+ 
+ 
 @app.post("/signup")
 async def signup(user: UserCreate):
     if user.email in fake_users_db:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+   
     user_id = len(fake_users_db) + 1  # Simple ID assignment
     fake_users_db[user.email] = {
         "id": user_id,
@@ -284,18 +294,18 @@ async def signup(user: UserCreate):
     }
     fake_tokens_db[user_id] = 0  # Initialize token count
     return {"message": "User created successfully"}
-
-
-
+ 
+ 
+ 
 @app.post("/login")
 async def login(user_data: UserLogin):
     user = fake_users_db.get(user_data.email)
     if not user or not verify_password(user_data.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+   
     token = create_jwt_token({"user_id": user["id"], "role": user["role"]})
     return {"access_token": token, "token_type": "bearer"}
-
+ 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -308,24 +318,24 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.JWTError:
         raise HTTPException(status_code=401, detail="Could not validate token")
-
+ 
 @app.get("/user/tokens")
 async def get_user_tokens(current_user: dict = Depends(get_current_user)):
     return {"total_tokens": fake_tokens_db.get(current_user["id"], 0)}
-
+ 
 @app.get("/admin/all-tokens")
 async def get_all_tokens(current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Not authorized")
     return fake_tokens_db
-
+ 
 @app.post("/update-tokens")
 async def update_tokens(token_update: TokenUpdate, current_user: dict = Depends(get_current_user)):
     if token_update.user_id not in fake_tokens_db:
         raise HTTPException(status_code=404, detail="User not found")
     fake_tokens_db[token_update.user_id] += token_update.tokens_used
     return {"message": "Tokens updated successfully"}
-
+ 
 @app.post("/summarize-topic")
 def summarize_topic_endpoint(topic_request: TopicRequest):
     """
@@ -354,7 +364,7 @@ def summarize_topic_endpoint(topic_request: TopicRequest):
     except Exception as e:
         logging.error(f"Error in /summarize-topic: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
+ 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Upload a PDF or TXT file and update the documents and embeddings."""
@@ -470,7 +480,7 @@ async def generate_answer(request: QueryRequest):
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
    
     try:
-        # Retrieve relevant context
+       
         retrieved = await retrieve_documents(request)
         context = "\n".join([doc.document for doc in retrieved])
        
@@ -487,7 +497,7 @@ Answer clearly and concisely using the provided context. If unsure, state that y
     except Exception as e:
         logging.error(f"Generation error: {str(e)}")
         raise HTTPException(status_code=500, detail="Error generating answer")
-
+ 
 @app.post("/extract-website-data/", response_model=WebsiteDataResponse)
 async def extract_website_data(file: UploadFile = File(...)):
     try:
@@ -520,5 +530,3 @@ async def extract_website_data(file: UploadFile = File(...)):
  
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing the image: {str(e)}")
- 
-
