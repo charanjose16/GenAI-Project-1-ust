@@ -13,7 +13,11 @@ backoff==2.2.1
 bcrypt==4.2.1
 beautifulsoup4==4.12.3
 cachetools==5.5.1
+<<<<<<< HEAD
 certifi>=2024.7.4,<2025.0.0
+=======
+certifi>=2024.7.4,<2025.0.0  # Loosened version constraint
+>>>>>>> 15eef0dcde47ffbd82b1ac0f7811dbed6521d505
 cffi==1.17.1
 charset-normalizer==3.4.1
 click==8.1.8
@@ -41,8 +45,8 @@ fsspec==2024.9.0
 greenlet==3.1.1
 gunicorn==22.0.0
 h11==0.14.0
-httpcore==1.0.7
-httpx==0.27.2
+httpcore==1.0.7  # Ensure compatibility with certifi range
+httpx==0.27.2  # Ensure compatibility with certifi range
 huggingface-hub==0.28.1
 idna==3.10
 importlib_metadata==8.6.1
@@ -53,7 +57,7 @@ json_repair==0.35.0
 jsonschema==4.23.0
 jsonschema-specifications==2024.10.1
 litellm==1.57.4
-llama-cloud==0.1.11
+llama-cloud==0.1.11  # Ensure compatibility with certifi range
 llama-index==0.12.15
 llama-index-agent-openai==0.4.3
 llama-index-cli==0.4.0
