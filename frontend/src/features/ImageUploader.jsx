@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { motion, AnimatePresence } from "framer-motion";
@@ -8,14 +8,15 @@ const Navbar = () => {
   const username = localStorage.getItem("username") || "User";
 
   return (
-    <nav className="fixed top-0 left-0 w-full bg-gray-900/80 backdrop-blur-sm z-50 shadow-lg">
+    <nav className="fixed top-0 left-0 w-full bg-gray-900 backdrop-blur-sm z-50 shadow-lg">
       <div className="container mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center">
           <FaBrain className="h-8 w-8 text-blue-400 mr-2" />
           <span className="text-xl font-bold text-white">AI Made Easier</span>
         </div>
         <div className="text-gray-300 text-lg font-medium">
-          Welcome, <span className="text-blue-400 font-semibold">{username}</span>
+          Welcome,{" "}
+          <span className="text-blue-400 font-semibold">{username}</span>
         </div>
       </div>
     </nav>
@@ -30,6 +31,7 @@ const ImageUploader = () => {
   const [loadingStage, setLoadingStage] = useState(""); // "scanning", "processing", "generating"
   const [error, setError] = useState("");
   const [isVisible, setIsVisible] = useState(true);
+  const [resultData, setResultData] = useState(null);
   const navigate = useNavigate();
   const token = localStorage.getItem("token");
 
@@ -60,6 +62,7 @@ const ImageUploader = () => {
     setLoading(true);
     setError("");
     setDescription("");
+    setResultData(null);
 
     // Set the loading stage messages with 1-second intervals.
     setLoadingStage("scanning");
@@ -78,20 +81,28 @@ const ImageUploader = () => {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await axios.post("http://127.0.0.1:8000/describe", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await axios.post(
+        "http://127.0.0.1:8000/describe",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
 
-      setDescription(response.data.description);
+      console.log("Response Data:", response.data); // Log the full response
+      setResultData(response.data); // Store the result data
     } catch (err) {
-      setError(err.response?.data?.detail || "An error occurred while processing the image.");
+      setError(
+        err.response?.data?.detail ||
+          "An error occurred while processing the image."
+      );
     } finally {
       clearTimers();
       setLoading(false);
-      setLoadingStage("");
+      setLoadingStage(""); // Reset the loading stage after the process is complete
     }
   };
 
@@ -122,11 +133,18 @@ const ImageUploader = () => {
                 ✖
               </button>
 
-              <h1 className="text-3xl font-bold mb-6 text-center">Image Description Generator</h1>
+              <h1 className="text-3xl font-bold mb-6 text-center">
+                Image Description Generator
+              </h1>
 
-              <form onSubmit={handleSubmit} className="w-full flex flex-col items-center gap-6">
+              <form
+                onSubmit={handleSubmit}
+                className="w-full flex flex-col items-center gap-6"
+              >
                 <div className="w-full">
-                  <label className="block text-sm font-medium mb-2">Upload Image</label>
+                  <label className="block text-sm font-medium mb-2">
+                    Upload Image
+                  </label>
                   <input
                     type="file"
                     accept="image/*"
@@ -144,7 +162,9 @@ const ImageUploader = () => {
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.3 }}
                     >
-                      <h2 className="text-xl font-semibold mb-4">Image Preview</h2>
+                      <h2 className="text-xl font-semibold mb-4">
+                        Image Preview
+                      </h2>
                       <img
                         src={preview}
                         alt="Uploaded Preview"
@@ -163,6 +183,7 @@ const ImageUploader = () => {
                 </button>
               </form>
 
+              {/* Show error if any */}
               <AnimatePresence>
                 {error && (
                   <motion.div
@@ -177,16 +198,104 @@ const ImageUploader = () => {
                 )}
               </AnimatePresence>
 
+              {/* Show the description after processing */}
               <AnimatePresence>
-                {description && (
+                {resultData && (
                   <motion.div
                     className="mt-6 p-6 bg-gray-700 rounded-lg shadow-lg w-full text-center"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                   >
-                    <h2 className="text-xl font-semibold mb-2">Generated Description</h2>
-                    <p className="text-gray-300 text-lg">{description}</p>
+                    <div
+                      className="results"
+                      style={{
+                        display: "flex",
+                        gap: "2rem",
+                        flexDirection: "row",
+                        marginTop: "2rem",
+                        width: "100%",
+                      }}
+                    >
+                      <div
+                        className="content-section"
+                        style={{
+                          flex: 1,
+                          backgroundColor: "#2D3748",
+                          padding: "2rem",
+                          borderRadius: "10px",
+                          boxShadow: "0 2px 15px rgba(0, 0, 0, 0.1)",
+                        }}
+                      >
+                        <h2 className="text-white mb-4">Content Analysis</h2>
+                        <div id="heroText" className="text-white mb-4">
+                          <h3 className="text-lg font-semibold">Hero Text</h3>
+                          <p>{resultData.hero_text || "N/A"}</p>
+                        </div>
+                        <div
+                          id="websiteDescription"
+                          className="text-white mb-4"
+                        >
+                          <h3 className="text-lg font-semibold">
+                            Website Description
+                          </h3>
+                          <p>{resultData.website_description || "N/A"}</p>
+                        </div>
+                        <div id="callToAction" className="text-white mb-4">
+                          <h3 className="text-lg font-semibold">
+                            Call to Action
+                          </h3>
+                          <p>{resultData.call_to_action || "N/A"}</p>
+                        </div>
+                        <div id="websiteContent" className="text-white mb-4">
+                          <h3 className="text-lg font-semibold">
+                            Website Content
+                          </h3>
+                          <p>{resultData.website_content || "N/A"}</p>
+                        </div>
+                      </div>
+
+                      <div
+                        className="metadata-section"
+                        style={{
+                          backgroundColor: "#2D3748",
+                          padding: "2rem",
+                          borderRadius: "10px",
+                          boxShadow: "0 2px 15px rgba(0, 0, 0, 0.1)",
+                        }}
+                      >
+                        <h2 className="text-white mb-4">Design Metadata</h2>
+                        <h3 className="text-white">Color Palette</h3>
+                        <div
+                          className="color-palette"
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            margin: "1rem 0",
+                          }}
+                        >
+                          {resultData.color_palette &&
+                            resultData.color_palette.map((color, index) => (
+                              <div
+                                key={index}
+                                className="color-box"
+                                style={{
+                                  width: "50px",
+                                  height: "50px",
+                                  borderRadius: "5px",
+                                  border: "1px solid #ddd",
+                                  backgroundColor: color,
+                                }}
+                              />
+                            ))}
+                        </div>
+
+                        <h3 className="text-white">Font Palette</h3>
+                        <div className="text-white">
+                          {resultData.font_palette?.join(", ") || "N/A"}
+                        </div>
+                      </div>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
