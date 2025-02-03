@@ -1,9 +1,0 @@
-fastapi
-uvicorn
-python-dotenv
-dspy
-tiktoken
-sqlalchemy
-asyncpg
-psycopg2-binary
-alembic
