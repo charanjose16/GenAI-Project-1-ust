@@ -29,6 +29,10 @@ import uuid
 import random
 import os
 import certifi
+import dspy
+import base64
+import tiktoken
+import os
 
 from features.data import  generate_synthetic_users
 from features.mainsummary import TopicRequest, extract_blog_content, search_articles, summarize_blog
@@ -89,11 +93,12 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow all origins for testing, otherwise set specific origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 # OAuth2 scheme
@@ -244,74 +249,109 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         "role": user["role"],  # Include role in the response
     }
 
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+# Additional imports for DSPy
+import dspy
+import base64
+import tiktoken
+import os
+
+# Load environment variables
+load_dotenv()
+
+# Define the response model
+class WebsiteDataResponse(BaseModel):
+    hero_text: Optional[str]
+    website_description: Optional[str]
+    call_to_action: Optional[str]
+    color_palette: Optional[List[str]]
+    font_palette: Optional[List[str]]
+    website_content: Optional[str]
+    input_token_count: int
+    output_token_count: int
+    total_token_count: int
+
+# DSPy Signature and Module for image description
+class WebsiteDataExtractionSignature(dspy.Signature):
+    """Website data extraction from image"""
+    website_screenshot: dspy.Image = dspy.InputField(desc="A screenshot of the website")
+    hero_text: str = dspy.OutputField(desc="The hero text of the website")
+    website_description: str = dspy.OutputField(desc="A description of the website")
+    call_to_action: str = dspy.OutputField(desc="The call to action of the website")
+    color_palette: List[str] = dspy.OutputField(desc="The color palette of the website")
+    font_palette: List[str] = dspy.OutputField(desc="The font palette of the website")
+    website_content: str = dspy.OutputField(desc="The main content of the website")
+
+class WebsiteDataExtraction(dspy.Module):
+    def __init__(self):
+        self.website_data_extraction = dspy.ChainOfThought(WebsiteDataExtractionSignature)
+
+    def forward(self, website_screenshot: str):
+        return self.website_data_extraction(website_screenshot=website_screenshot)
+
+# Initialize DSPy with Azure OpenAI
+dspy_lm = dspy.LM(
+    model='azure/gpt-35-turbo',
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_base=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    api_version="2024-02-15-preview",
+    temperature=0.2,
+    max_tokens=4096,
+)
+dspy.configure(lm=dspy_lm)
+website_data_extractor = WebsiteDataExtraction()
+
+# Token counting with tiktoken
+def count_tokens(text: str, model_name: str = "gpt-4") -> int:
+    """Count the number of tokens in a text string using tiktoken."""
+    encoding = tiktoken.encoding_for_model(model_name)
+    return len(encoding.encode(text))
+
 @app.post("/describe")
-async def describe_image(file: UploadFile = File(...), current_user: UserInDB = Depends(get_current_active_user)):
+async def describe_image(file: UploadFile = File(...), token: str = Depends(oauth2_scheme)):
     try:
         # Save the uploaded file temporarily
         temp_image_path = f"temp_{file.filename}"
         with open(temp_image_path, "wb") as buffer:
             buffer.write(await file.read())
 
-        # Convert image to data URL
-        data_url = local_image_to_data_url(temp_image_path)
+        # Convert image to base64 data URL
+        mime_type, _ = guess_type(temp_image_path)
+        with open(temp_image_path, "rb") as image_file:
+            base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+        image_data_uri = f"data:{mime_type};base64,{base64_data}"
 
-        # Prepare the user's input text
-        user_input_text = "Give a detailed explanation of the image in a professional and with exact details manner."
+        # Count input tokens
+        input_token_count = count_tokens(image_data_uri, model_name="gpt-4")
 
-        # Count tokens in the user's input text
-        input_token_count = count_tokens(user_input_text, model_name="gpt-4")
+        # Extract website data using DSPy
+        website_data = website_data_extractor(image_data_uri)
 
-        # Call Azure OpenAI to generate description
-        response = client.chat.completions.create(
-            model=aoai_deployment_name,
-            messages=[{
-                "role": "system",
-                "content": "You are an AI helpful assistant."
-            }, {
-                "role": "user",
-                "content": [{
-                    "type": "text",
-                    "text": user_input_text
-                }, {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": data_url
-                    }
-                }]
-            }],
-            max_tokens=4000 - input_token_count,  # Adjust max_tokens based on input tokens
-            temperature=0.9
-        )
+        # Count output tokens
+        output_token_count = count_tokens(website_data.website_content or "", model_name="gpt-4")
 
-        # Extract the description
-        img_description = response.choices[0].message.content
+        # Total token count
+        total_token_count = input_token_count + output_token_count
 
-        # Count tokens in the generated description
-        output_token_count = count_tokens(img_description, model_name="gpt-4")
-
-        # Clean up the temporary file
+        # Clean up temporary image file
         os.remove(temp_image_path)
 
-        # Record token usage
-        token_usage_data.append({
-            "username": current_user["username"],
-            "feature": "describe_image",
-            "input_tokens": input_token_count,
-            "output_tokens": output_token_count,
-            "total_tokens": input_token_count + output_token_count,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-
         # Return the description along with token counts
-        return {
-            "description": img_description,
-            "input_token_count": input_token_count,
-            "output_token_count": output_token_count,
-            "total_token_count": input_token_count + output_token_count
-        }
+        return WebsiteDataResponse(
+            hero_text=website_data.hero_text,
+            website_description=website_data.website_description,
+            call_to_action=website_data.call_to_action,
+            color_palette=website_data.color_palette,
+            font_palette=website_data.font_palette,
+            website_content=website_data.website_content,
+            input_token_count=input_token_count,
+            output_token_count=output_token_count,
+            total_token_count=total_token_count
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/summarize-topic")
 def summarize_topic_endpoint(topic_request: TopicRequest, current_user: UserInDB = Depends(get_current_active_user)):

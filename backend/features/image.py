@@ -1,118 +1,60 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from passlib.context import CryptContext
-from datetime import datetime, timedelta
-import jwt
+# Additional imports for DSPy
+import dspy
 import base64
+import tiktoken
 import os
-from dotenv import load_dotenv
-from mimetypes import guess_type
-from openai import AzureOpenAI
-import tiktoken  # Import tiktoken for token counting
 
 # Load environment variables
 load_dotenv()
 
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+# Define the response model
+class WebsiteDataResponse(BaseModel):
+    hero_text: Optional[str]
+    website_description: Optional[str]
+    call_to_action: Optional[str]
+    color_palette: Optional[List[str]]
+    font_palette: Optional[List[str]]
+    website_content: Optional[str]
+    input_token_count: int
+    output_token_count: int
+    total_token_count: int
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# DSPy Signature and Module for image description
+class WebsiteDataExtractionSignature(dspy.Signature):
+    """Website data extraction from image"""
+    website_screenshot: dspy.Image = dspy.InputField(desc="A screenshot of the website")
+    hero_text: str = dspy.OutputField(desc="The hero text of the website")
+    website_description: str = dspy.OutputField(desc="A description of the website")
+    call_to_action: str = dspy.OutputField(desc="The call to action of the website")
+    color_palette: List[str] = dspy.OutputField(desc="The color palette of the website")
+    font_palette: List[str] = dspy.OutputField(desc="The font palette of the website")
+    website_content: str = dspy.OutputField(desc="The main content of the website")
 
-# Mock user database
-fake_users_db = {}
+class WebsiteDataExtraction(dspy.Module):
+    def __init__(self):
+        self.website_data_extraction = dspy.ChainOfThought(WebsiteDataExtractionSignature)
 
-# Models
-class User(BaseModel):
-    username: str
-    password: str
+    def forward(self, website_screenshot: str):
+        return self.website_data_extraction(website_screenshot=website_screenshot)
 
-class UserInDB(User):
-    hashed_password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-# Initialize FastAPI app
-app = FastAPI()
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Initialize DSPy with Azure OpenAI
+dspy_lm = dspy.LM(
+    model='azure/gpt-35-turbo',
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_base=os.getenv("AZURE_OPENAI_ENDPOINT"),
+    api_version="2024-02-15-preview",
+    temperature=0.2,
+    max_tokens=4096,
 )
-
-# OAuth2 scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# Azure OpenAI Configuration
-aoai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-aoai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
-aoai_deployment_name = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
-aoai_api_version = os.getenv("AZURE_OPENAI_VERSION", "2023-05-15")
-
-# Initialize the AzureOpenAI client
-client = AzureOpenAI(
-    azure_endpoint=aoai_endpoint,
-    api_key=aoai_api_key,
-    api_version=aoai_api_version
-)
-
-# Helper functions
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-def authenticate_user(username: str, password: str):
-    if username in fake_users_db:
-        user_dict = fake_users_db[username]
-        if verify_password(password, user_dict["hashed_password"]):
-            return user_dict
-    return None
+dspy.configure(lm=dspy_lm)
+website_data_extractor = WebsiteDataExtraction()
 
 # Token counting with tiktoken
 def count_tokens(text: str, model_name: str = "gpt-4") -> int:
     """Count the number of tokens in a text string using tiktoken."""
     encoding = tiktoken.encoding_for_model(model_name)
     return len(encoding.encode(text))
-
-# Routes
-@app.post("/register")
-async def register(user: User):
-    if user.username in fake_users_db:
-        raise HTTPException(status_code=400, detail="Username already registered")
-    hashed_password = get_password_hash(user.password)
-    fake_users_db[user.username] = {"username": user.username, "hashed_password": hashed_password}
-    return {"message": "User registered successfully"}
-
-@app.post("/token", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(data={"sub": user["username"]}, expires_delta=access_token_expires)
-    return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/describe")
 async def describe_image(file: UploadFile = File(...), token: str = Depends(oauth2_scheme)):
@@ -122,83 +64,39 @@ async def describe_image(file: UploadFile = File(...), token: str = Depends(oaut
         with open(temp_image_path, "wb") as buffer:
             buffer.write(await file.read())
 
-        # Convert image to data URL
-        data_url = local_image_to_data_url(temp_image_path)
+        # Convert image to base64 data URL
+        mime_type, _ = guess_type(temp_image_path)
+        with open(temp_image_path, "rb") as image_file:
+            base64_data = base64.b64encode(image_file.read()).decode('utf-8')
+        image_data_uri = f"data:{mime_type};base64,{base64_data}"
 
-        # Prepare the user's input text
-        user_input_text = "Give a detailed explanation of the image in a proffesional and with excate details manner."
+        # Count input tokens
+        input_token_count = count_tokens(image_data_uri, model_name="gpt-4")
 
-        # Count tokens in the user's input text
-        input_token_count = count_tokens(user_input_text, model_name="gpt-4")
+        # Extract website data using DSPy
+        website_data = website_data_extractor(image_data_uri)
 
-        # Call Azure OpenAI to generate description
-        response = client.chat.completions.create(
-            model=aoai_deployment_name,
-            messages=[{
-                "role": "system",
-                "content": "You are an AI helpful assistant."
-            }, {
-                "role": "user",
-                "content": [{
-                    "type": "text",
-                    "text": user_input_text
-                }, {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": data_url
-                    }
-                }]
-            }],
-            max_tokens=4000 - input_token_count,  # Adjust max_tokens based on input tokens
-            temperature=0.9
-        )
+        # Count output tokens
+        output_token_count = count_tokens(website_data.website_content or "", model_name="gpt-4")
 
-        # Extract the description
-        img_description = response.choices[0].message.content
+        # Total token count
+        total_token_count = input_token_count + output_token_count
 
-        # Count tokens in the generated description
-        output_token_count = count_tokens(img_description, model_name="gpt-4")
-
-        # Clean up the temporary file
+        # Clean up temporary image file
         os.remove(temp_image_path)
 
         # Return the description along with token counts
-        return {
-            "description": img_description,
-            "input_token_count": input_token_count,
-            "output_token_count": output_token_count,
-            "total_token_count": input_token_count + output_token_count
-        }
+        return WebsiteDataResponse(
+            hero_text=website_data.hero_text,
+            website_description=website_data.website_description,
+            call_to_action=website_data.call_to_action,
+            color_palette=website_data.color_palette,
+            font_palette=website_data.font_palette,
+            website_content=website_data.website_content,
+            input_token_count=input_token_count,
+            output_token_count=output_token_count,
+            total_token_count=total_token_count
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-def local_image_to_data_url(image_path: str) -> str:
-    """
-    Convert a local image file to a data URL.
-
-    Parameters:
-    -----------
-    image_path : str
-        The path to the local image file to be converted.
-
-    Returns:
-    --------
-    str
-        A data URL representing the image, suitable for embedding in HTML or other web contexts.
-    """
-    # Get mime type
-    mime_type, _ = guess_type(image_path)
-
-    if mime_type is None:
-        mime_type = 'application/octet-stream'
-
-    with open(image_path, "rb") as image_file:
-        base64_encoded_data = base64.b64encode(image_file.read()).decode('utf-8')
-
-    return f"data:{mime_type};base64,{base64_encoded_data}"
-
-# Run the FastAPI app
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app)
