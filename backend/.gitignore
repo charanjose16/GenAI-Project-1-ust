@@ -1,3 +1,4 @@
 *.env
 huggingface.co.crt
 \venv
+\__pycache__
